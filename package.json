@@ -1,8 +1,31 @@
 {
-  "name": "scanbim-mcp",
-  "version": "1.0.2",
-  "description": "The AI Hub for AEC — Unified MCP server by ScanBIM Labs",
+  "name": "@scanbim-labs/scanbim-mcp",
+  "version": "1.0.5",
+  "mcpName": "io.github.scanbim-labs/scanbim-mcp",
+  "description": "The AI Hub for AEC â€” 46 real tools for Revit, Navisworks, ACC, Twinmotion, XR, and 50+ 3D formats via Autodesk Platform Services.",
   "main": "src/index.js",
-  "author": "ScanBIM Labs LLC",
-  "license": "MIT"
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute ian-martin-dashboard --local --file=./schema.sql",
+    "test": "node -e \"fetch('http://localhost:8787/health').then(r=>r.json()).then(console.log)\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ScanBIM-Labs/scanbim-mcp.git"
+  },
+  "keywords": [
+    "mcp", "model-context-protocol", "bim", "revit", "navisworks",
+    "acc", "twinmotion", "autodesk", "aps", "aec", "construction",
+    "vdc", "3d-viewer", "clash-detection", "ifc"
+  ],
+  "author": "ScanBIM Labs LLC <itmartin24@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://scanbimlabs.io",
+  "bugs": {
+    "url": "https://github.com/ScanBIM-Labs/scanbim-mcp/issues"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
 }

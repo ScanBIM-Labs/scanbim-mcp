@@ -1,3 +1,19 @@
 name = "scanbim-mcp"
 main = "src/index.js"
 compatibility_date = "2024-09-23"
+
+# Bind to your existing D1 database
+[[d1_databases]]
+binding = "DB"
+database_name = "ian-martin-dashboard"
+database_id = "3c6dde6f-e729-4274-a5c1-dcbfa83f8c56"
+
+# Bind to your existing KV namespace for caching
+[[kv_namespaces]]
+binding = "CACHE"
+id = "3d62a20da2624ec2ad323f1f75dc3ba6"
+
+# Custom domain (optional - set up after deploy)
+# routes = [
+#   { pattern = "mcp.scanbim.app/*", zone_name = "scanbim.app" }
+# ]

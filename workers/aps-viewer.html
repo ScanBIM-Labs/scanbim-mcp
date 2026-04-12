@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScanBIM Viewer — APS Model Viewer</title>
+  <meta name="description" content="View translated APS models in the browser. Powered by Autodesk Platform Services and ScanBIM Labs.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- APS Viewer JS v7 -->
+  <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css">
+  <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.min.js"></script>
+
+  <style>
+    :root {
+      --orange: #e8820c;
+      --orange-light: #f09a30;
+      --bg: #0f1117;
+      --bg-surface: #151820;
+      --bg-card: #1a1d28;
+      --border: #2a2d38;
+      --text: #e0e0e8;
+      --text-muted: #7a7d8a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
+
+    /* Top bar */
+    .topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      height: 48px; background: var(--bg-surface); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; padding: 0 1.5rem;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
+    .logo-slices { display: flex; flex-direction: column; gap: 1.5px; width: 22px; }
+    .logo-slice { height: 6px; border-radius: 1.5px; }
+    .logo-slice-1 { background: #ff9500; width: 15px; margin-left: 3px; }
+    .logo-slice-2 { background: #e8820c; width: 20px; margin-left: 1px; }
+    .logo-slice-3 { background: #c96f08; width: 22px; }
+    .topbar-title { font-weight: 600; font-size: 0.9rem; }
+    .topbar-title strong { color: var(--orange); }
+    .topbar-right { display: flex; align-items: center; gap: 1rem; }
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.2rem 0.7rem; border-radius: 99px; font-size: 0.72rem; font-weight: 600;
+    }
+    .status-loading { background: rgba(232,130,12,0.15); color: var(--orange); }
+    .status-ready { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .status-error { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .status-loading .status-dot { background: var(--orange); animation: blink 1.5s infinite; }
+    .status-ready .status-dot { background: #22c55e; }
+    .status-error .status-dot { background: #ef4444; }
+    @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+    .btn-sm {
+      padding: 0.3rem 0.8rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600;
+      text-decoration: none; border: 1px solid var(--border); color: var(--text); background: transparent;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-sm:hover { border-color: var(--orange); color: var(--orange); }
+
+    /* Viewer container */
+    #viewer-container {
+      position: fixed; top: 48px; left: 0; right: 0; bottom: 0;
+    }
+
+    /* Loading overlay */
+    .loading-overlay {
+      position: fixed; top: 48px; left: 0; right: 0; bottom: 0;
+      background: var(--bg); display: flex; flex-direction: column;
+      align-items: center; justify-content: center; z-index: 50;
+      transition: opacity 0.5s;
+    }
+    .loading-overlay.hidden { opacity: 0; pointer-events: none; }
+    .spinner { width: 48px; height: 48px; border: 3px solid var(--border); border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 1.5rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { color: var(--text-muted); font-size: 0.9rem; }
+    .loading-detail { color: var(--text-muted); font-size: 0.78rem; margin-top: 0.5rem; opacity: 0.6; }
+
+    /* Error state */
+    .error-overlay {
+      position: fixed; top: 48px; left: 0; right: 0; bottom: 0;
+      background: var(--bg); display: none; flex-direction: column;
+      align-items: center; justify-content: center; z-index: 50;
+    }
+    .error-overlay.visible { display: flex; }
+    .error-icon { font-size: 3rem; margin-bottom: 1rem; }
+    .error-title { font-size: 1.2rem; font-weight: 700; color: #ef4444; margin-bottom: 0.5rem; }
+    .error-detail { color: var(--text-muted); font-size: 0.85rem; max-width: 500px; text-align: center; line-height: 1.6; }
+    .error-actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; }
+
+    /* No URN state */
+    .no-urn-overlay {
+      position: fixed; top: 48px; left: 0; right: 0; bottom: 0;
+      background: var(--bg); display: none; flex-direction: column;
+      align-items: center; justify-content: center; z-index: 50;
+    }
+    .no-urn-overlay.visible { display: flex; }
+    .no-urn-title { font-size: 1.4rem; font-weight: 700; color: var(--text); margin-bottom: 0.5rem; }
+    .no-urn-desc { color: var(--text-muted); font-size: 0.9rem; max-width: 500px; text-align: center; line-height: 1.7; margin-bottom: 2rem; }
+    .urn-input-wrap { display: flex; gap: 0.5rem; width: 100%; max-width: 600px; }
+    .urn-input {
+      flex: 1; padding: 0.6rem 1rem; background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 0.85rem; font-family: 'SF Mono', monospace;
+      outline: none; transition: border-color 0.2s;
+    }
+    .urn-input:focus { border-color: var(--orange); }
+    .urn-submit {
+      padding: 0.6rem 1.2rem; background: var(--orange); color: #fff; border: none;
+      border-radius: 8px; font-weight: 600; font-size: 0.85rem; cursor: pointer; white-space: nowrap;
+    }
+    .urn-submit:hover { background: var(--orange-light); }
+
+    /* Info panel */
+    .info-panel {
+      position: fixed; bottom: 1rem; left: 1rem; z-index: 60;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.75rem 1rem; font-size: 0.75rem; color: var(--text-muted);
+      max-width: 350px; display: none;
+    }
+    .info-panel.visible { display: block; }
+    .info-panel strong { color: var(--text); }
+
+    /* Override APS Viewer dark theme */
+    .adsk-viewing-viewer { background: var(--bg) !important; }
+  </style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo-slices">
+      <div class="logo-slice logo-slice-1"></div>
+      <div class="logo-slice logo-slice-2"></div>
+      <div class="logo-slice logo-slice-3"></div>
+    </div>
+    <span class="topbar-title"><strong>ScanBIM</strong> Viewer</span>
+  </div>
+  <div class="topbar-right">
+    <span id="statusBadge" class="status-badge status-loading">
+      <span class="status-dot"></span>
+      <span id="statusText">Initializing...</span>
+    </span>
+    <a href="https://scanbim.app/viewer" class="btn-sm">Open Full Viewer</a>
+    <a href="https://scanbimlabs.io/mcp" class="btn-sm">MCP Tools</a>
+  </div>
+</div>
+
+<!-- APS Viewer Container -->
+<div id="viewer-container"></div>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" class="loading-overlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">Loading model...</div>
+  <div class="loading-detail" id="loadingDetail"></div>
+</div>
+
+<!-- Error Overlay -->
+<div id="errorOverlay" class="error-overlay">
+  <div class="error-icon">&#9888;</div>
+  <div class="error-title" id="errorTitle">Failed to Load Model</div>
+  <div class="error-detail" id="errorDetail"></div>
+  <div class="error-actions">
+    <button class="btn-sm" onclick="location.reload()">Retry</button>
+    <a href="https://scanbim.app/viewer" class="btn-sm">Open in ScanBIM 3D</a>
+  </div>
+</div>
+
+<!-- No URN State -->
+<div id="noUrnOverlay" class="no-urn-overlay">
+  <div class="no-urn-title">APS Model Viewer</div>
+  <div class="no-urn-desc">
+    Enter a Base64-encoded URN from Autodesk Platform Services to view a translated model.
+    Models uploaded via ScanBIM MCP tools will provide a URN automatically.
+  </div>
+  <div class="urn-input-wrap">
+    <input type="text" id="urnInput" class="urn-input" placeholder="Paste URN (e.g. dXJuOmFkc2sub2JqZWN0cy...)">
+    <button class="urn-submit" onclick="loadFromInput()">View Model</button>
+  </div>
+</div>
+
+<!-- Model Info Panel -->
+<div id="infoPanel" class="info-panel">
+  <div><strong>Model:</strong> <span id="infoName">—</span></div>
+  <div><strong>Status:</strong> <span id="infoStatus">—</span></div>
+  <div><strong>URN:</strong> <span id="infoUrn" style="word-break:break-all;">—</span></div>
+</div>
+
+<script>
+// ── Configuration ─────────────────────────────────────────────
+const APS_TOKEN_ENDPOINT = 'https://scanbim-mcp.itmartin24.workers.dev';
+const MANIFEST_BASE = 'https://developer.api.autodesk.com/modelderivative/v2/designdata';
+
+let viewer = null;
+let currentUrn = null;
+
+// ── Get APS Token via scanbim-mcp worker ──────────────────────
+async function getToken() {
+  // Call scanbim-mcp's /mcp endpoint to get a token via tools/call
+  // Or use a dedicated /token endpoint if available
+  // For now, use the MCP protocol to call get_supported_formats which returns token implicitly
+  // Better: add a /token proxy endpoint to the worker
+
+  // Try /token endpoint first (we'll add this to the worker)
+  try {
+    const resp = await fetch(APS_TOKEN_ENDPOINT + '/token');
+    if (resp.ok) {
+      const data = await resp.json();
+      return data.access_token;
+    }
+  } catch (e) {}
+
+  // Fallback: call the MCP tools/call to get viewer link which requires auth
+  const mcpResp = await fetch(APS_TOKEN_ENDPOINT + '/mcp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'get_viewer_link',
+        arguments: { model_id: currentUrn || 'test' }
+      }
+    })
+  });
+
+  if (mcpResp.ok) {
+    const data = await mcpResp.json();
+    // The worker should have authenticated — try /token again
+    const retry = await fetch(APS_TOKEN_ENDPOINT + '/token');
+    if (retry.ok) return (await retry.json()).access_token;
+  }
+
+  throw new Error('Could not obtain APS access token');
+}
+
+// ── Initialize APS Viewer ─────────────────────────────────────
+async function initViewer(urn) {
+  currentUrn = urn;
+  setStatus('loading', 'Authenticating...');
+  setLoading('Obtaining APS token...', '');
+
+  try {
+    const token = await getToken();
+
+    setLoading('Initializing viewer...', 'URN: ' + urn.substring(0, 30) + '...');
+
+    const options = {
+      env: 'AutodeskProduction2',
+      api: 'streamingV2',
+      getAccessToken: function(onTokenReady) {
+        // Return the token with 1 hour expiry
+        onTokenReady(token, 3600);
+      }
+    };
+
+    Autodesk.Viewing.Initializer(options, function() {
+      const container = document.getElementById('viewer-container');
+      viewer = new Autodesk.Viewing.GuiViewer3D(container, {
+        extensions: ['Autodesk.DocumentBrowser'],
+        theme: 'dark-theme'
+      });
+      viewer.start();
+
+      setLoading('Loading document...', 'Fetching model manifest');
+
+      const documentId = 'urn:' + urn;
+      Autodesk.Viewing.Document.load(
+        documentId,
+        onDocumentLoaded,
+        onDocumentFailed
+      );
+    });
+
+  } catch (err) {
+    showError('Authentication Failed', 'Could not obtain an APS access token. Make sure the scanbim-mcp worker is running and APS credentials are configured. Error: ' + err.message);
+  }
+}
+
+function onDocumentLoaded(doc) {
+  setLoading('Rendering model...', 'Loading viewable geometry');
+
+  // Get the default 3D viewable
+  const viewables = doc.getRoot().getDefaultGeometry();
+  if (!viewables) {
+    // Try to find any 3D viewable
+    const all3d = doc.getRoot().search({ type: 'geometry', role: '3d' });
+    if (all3d.length > 0) {
+      viewer.loadDocumentNode(doc, all3d[0]).then(onModelLoaded).catch(onModelFailed);
+    } else {
+      // Try 2D
+      const all2d = doc.getRoot().search({ type: 'geometry', role: '2d' });
+      if (all2d.length > 0) {
+        viewer.loadDocumentNode(doc, all2d[0]).then(onModelLoaded).catch(onModelFailed);
+      } else {
+        showError('No Viewables', 'This model has no viewable geometry. It may still be translating — try again in a few minutes.');
+      }
+    }
+    return;
+  }
+
+  viewer.loadDocumentNode(doc, viewables).then(onModelLoaded).catch(onModelFailed);
+}
+
+function onModelLoaded(model) {
+  hideLoading();
+  setStatus('ready', 'Model Loaded');
+
+  // Show info panel
+  const infoPanel = document.getElementById('infoPanel');
+  infoPanel.classList.add('visible');
+  document.getElementById('infoName').textContent = model.getDocumentNode ? model.getDocumentNode().name() || 'Untitled' : 'Model';
+  document.getElementById('infoStatus').textContent = 'Loaded';
+  document.getElementById('infoUrn').textContent = currentUrn ? currentUrn.substring(0, 40) + '...' : '—';
+
+  // Fit to view
+  viewer.fitToView();
+}
+
+function onModelFailed(err) {
+  showError('Model Load Failed', 'The viewer could not render this model. Error: ' + (err.message || err));
+}
+
+function onDocumentFailed(errorCode, errorMsg) {
+  const messages = {
+    1: 'Document not found. The URN may be invalid.',
+    2: 'No viewable geometry. The model may still be translating.',
+    3: 'Missing or invalid access token.',
+    4: 'Network error while loading the document.',
+    5: 'Access denied. The APS app may not have permission to view this model.',
+    7: 'Invalid model. The translation may have failed.',
+    9: 'Model translation in progress. Try again in a few minutes.'
+  };
+
+  const detail = messages[errorCode] || ('Error code: ' + errorCode + '. ' + (errorMsg || ''));
+  showError('Document Load Failed', detail);
+}
+
+// ── UI Helpers ────────────────────────────────────────────────
+function setStatus(type, text) {
+  const badge = document.getElementById('statusBadge');
+  badge.className = 'status-badge status-' + type;
+  document.getElementById('statusText').textContent = text;
+}
+
+function setLoading(text, detail) {
+  document.getElementById('loadingText').textContent = text;
+  document.getElementById('loadingDetail').textContent = detail || '';
+  document.getElementById('loadingOverlay').classList.remove('hidden');
+  document.getElementById('noUrnOverlay').classList.remove('visible');
+}
+
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.add('hidden');
+}
+
+function showError(title, detail) {
+  document.getElementById('loadingOverlay').classList.add('hidden');
+  document.getElementById('errorTitle').textContent = title;
+  document.getElementById('errorDetail').textContent = detail;
+  document.getElementById('errorOverlay').classList.add('visible');
+  setStatus('error', 'Error');
+}
+
+function showNoUrn() {
+  document.getElementById('loadingOverlay').classList.add('hidden');
+  document.getElementById('noUrnOverlay').classList.add('visible');
+  setStatus('loading', 'Waiting for URN');
+}
+
+function loadFromInput() {
+  const input = document.getElementById('urnInput').value.trim();
+  if (!input) return;
+  // Update URL without reload
+  const newUrl = window.location.pathname + '?urn=' + encodeURIComponent(input);
+  window.history.pushState({}, '', newUrl);
+  initViewer(input);
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const urn = params.get('urn');
+
+  if (urn) {
+    initViewer(urn);
+  } else {
+    // No URN provided — show input form
+    showNoUrn();
+  }
+})();
+</script>
+
+</body>
+</html>
