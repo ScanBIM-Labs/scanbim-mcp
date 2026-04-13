@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "scanbim": {
+      "url": "https://scanbim-mcp.itmartin24.workers.dev/mcp"
+    },
+    "revit": {
+      "url": "https://revit-mcp.itmartin24.workers.dev/mcp"
+    },
+    "acc": {
+      "url": "https://acc-mcp.itmartin24.workers.dev/mcp"
+    },
+    "navisworks": {
+      "url": "https://navisworks-mcp.itmartin24.workers.dev/mcp"
+    },
+    "twinmotion": {
+      "url": "https://twinmotion-mcp.itmartin24.workers.dev/mcp"
+    }
+  }
+}

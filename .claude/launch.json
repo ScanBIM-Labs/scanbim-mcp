@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "scanbim-mcp",
+      "runtimeExecutable": "C:/Program Files/nodejs/node.exe",
+      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "src/index.js", "--port", "8787"],
+      "port": 8787
+    },
+    {
+      "name": "revit-mcp",
+      "runtimeExecutable": "C:/Program Files/nodejs/node.exe",
+      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "workers/revit-mcp-index.js", "--port", "8788"],
+      "port": 8788
+    },
+    {
+      "name": "acc-mcp",
+      "runtimeExecutable": "C:/Program Files/nodejs/node.exe",
+      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "workers/acc-mcp-index.js", "--port", "8789"],
+      "port": 8789
+    },
+    {
+      "name": "navisworks-mcp",
+      "runtimeExecutable": "C:/Program Files/nodejs/node.exe",
+      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "workers/navisworks-mcp-index.js", "--port", "8790"],
+      "port": 8790
+    },
+    {
+      "name": "twinmotion-mcp",
+      "runtimeExecutable": "C:/Program Files/nodejs/node.exe",
+      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "workers/twinmotion-mcp-index.js", "--port", "8791"],
+      "port": 8791
+    }
+  ]
+}
