@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(export PATH=\"/c/Program Files/nodejs:$PATH\")",
+      "Bash(npm install:*)",
+      "Bash(npx wrangler:*)",
+      "Bash(curl -s http://127.0.0.1:8787/)",
+      "Bash(curl -s http://127.0.0.1:8787/health)"
+    ]
+  }
+}
