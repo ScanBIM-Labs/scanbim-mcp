@@ -55,16 +55,41 @@ async function ensureBucket(token, bucketKey) {
 }
 
 async function uploadToOSS(token, bucketKey, objectName, fileUrl) {
+  // APS deprecated the legacy PUT /objects/{name} endpoint. Use Signed S3 Upload:
+  //   1. GET  .../signeds3upload  → returns presigned S3 URL(s) + uploadKey
+  //   2. PUT  signed URL           → stream file bytes directly to S3
+  //   3. POST .../signeds3upload  → finalize with {uploadKey}
   const fileResp = await fetch(fileUrl);
   if (!fileResp.ok) throw new Error(`Cannot fetch file from URL: ${fileUrl}`);
   const fileData = await fileResp.arrayBuffer();
-  const uploadResp = await fetch(`${APS_BASE}/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(objectName)}`, {
+
+  // 1. Request signed S3 upload URL
+  const signedResp = await fetch(
+    `${APS_BASE}/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(objectName)}/signeds3upload?parts=1`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!signedResp.ok) throw new Error(`OSS signed URL failed: ${await signedResp.text()}`);
+  const { urls, uploadKey } = await signedResp.json();
+  if (!urls || !urls.length) throw new Error(`OSS signed URL returned no URLs`);
+
+  // 2. PUT bytes to S3 (no Authorization header — signed URL carries auth)
+  const s3Resp = await fetch(urls[0], {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
     body: fileData
   });
-  if (!uploadResp.ok) throw new Error(`OSS upload failed: ${await uploadResp.text()}`);
-  return await uploadResp.json();
+  if (!s3Resp.ok) throw new Error(`S3 upload failed: ${s3Resp.status} ${await s3Resp.text()}`);
+
+  // 3. Finalize upload
+  const finalizeResp = await fetch(
+    `${APS_BASE}/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(objectName)}/signeds3upload`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadKey })
+    }
+  );
+  if (!finalizeResp.ok) throw new Error(`OSS finalize failed: ${await finalizeResp.text()}`);
+  return await finalizeResp.json();
 }
 
 // ── APS MODEL DERIVATIVE ──────────────────────────────────────────────────
