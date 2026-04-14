@@ -6,12 +6,12 @@ compatibility_date = "2024-09-23"
 [[d1_databases]]
 binding = "DB"
 database_name = "ian-martin-dashboard"
-database_id = "3c6dde6f-e729-4274-a5c1-dcbfa83f8c56"
+database_id = "b7308a33-501f-4281-b85d-905bb8f3dbeb"
 
 # Bind to your existing KV namespace for caching
 [[kv_namespaces]]
 binding = "CACHE"
-id = "3d62a20da2624ec2ad323f1f75dc3ba6"
+id = "60b27eed538b4c3f95016b93baa03e33"
 
 # Custom domain (optional - set up after deploy)
 # routes = [

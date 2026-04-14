@@ -55,16 +55,41 @@ async function ensureBucket(token, bucketKey) {
 }
 
 async function uploadToOSS(token, bucketKey, objectName, fileUrl) {
+  // APS deprecated the legacy PUT /objects/{name} endpoint. Use Signed S3 Upload:
+  //   1. GET  .../signeds3upload  → returns presigned S3 URL(s) + uploadKey
+  //   2. PUT  signed URL           → stream file bytes directly to S3
+  //   3. POST .../signeds3upload  → finalize with {uploadKey}
   const fileResp = await fetch(fileUrl);
   if (!fileResp.ok) throw new Error(`Cannot fetch file from URL: ${fileUrl}`);
   const fileData = await fileResp.arrayBuffer();
-  const uploadResp = await fetch(`${APS_BASE}/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(objectName)}`, {
+
+  // 1. Request signed S3 upload URL
+  const signedResp = await fetch(
+    `${APS_BASE}/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(objectName)}/signeds3upload?parts=1`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!signedResp.ok) throw new Error(`OSS signed URL failed: ${await signedResp.text()}`);
+  const { urls, uploadKey } = await signedResp.json();
+  if (!urls || !urls.length) throw new Error(`OSS signed URL returned no URLs`);
+
+  // 2. PUT bytes to S3 (no Authorization header — signed URL carries auth)
+  const s3Resp = await fetch(urls[0], {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
     body: fileData
   });
-  if (!uploadResp.ok) throw new Error(`OSS upload failed: ${await uploadResp.text()}`);
-  return await uploadResp.json();
+  if (!s3Resp.ok) throw new Error(`S3 upload failed: ${s3Resp.status} ${await s3Resp.text()}`);
+
+  // 3. Finalize upload
+  const finalizeResp = await fetch(
+    `${APS_BASE}/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(objectName)}/signeds3upload`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadKey })
+    }
+  );
+  if (!finalizeResp.ok) throw new Error(`OSS finalize failed: ${await finalizeResp.text()}`);
+  return await finalizeResp.json();
 }
 
 // ── APS MODEL DERIVATIVE ──────────────────────────────────────────────────
@@ -233,6 +258,35 @@ function estimateRework(catA, catB) {
   return 2;
 }
 
+// ── MODEL COORDINATION: Built-in views & clash groups ────────────────────
+// Industry-standard VDC coordination views that most projects configure first.
+const BUILTIN_COORDINATION_VIEWS = [
+  { id: "view_all_disciplines", name: "All Disciplines", description: "Full federated model — architecture, structure, MEP, FP combined.", disciplines: ["Architectural","Structural","Mechanical","Electrical","Plumbing","Fire Protection"], categories: [] },
+  { id: "view_mep_coordination", name: "MEP Coordination", description: "Mechanical, Electrical, and Plumbing only — the classic above-ceiling coordination view.", disciplines: ["Mechanical","Electrical","Plumbing"], categories: ["Ducts","Duct Fittings","Pipes","Pipe Fittings","Conduits","Cable Trays","Electrical Equipment","Mechanical Equipment","Plumbing Fixtures"] },
+  { id: "view_mep_vs_structure", name: "MEP vs Structure", description: "All MEP trades against the structural frame — catches penetrations and clearance issues early.", disciplines: ["Mechanical","Electrical","Plumbing","Structural"], categories: ["Ducts","Pipes","Conduits","Structural Framing","Structural Columns","Structural Foundations"] },
+  { id: "view_mech_vs_plumb", name: "Mechanical vs Plumbing", description: "Ducts vs Pipes — SMACNA 18\" clearance rule applies.", disciplines: ["Mechanical","Plumbing"], categories: ["Ducts","Duct Fittings","Pipes","Pipe Fittings"] },
+  { id: "view_elec_vs_plumb", name: "Electrical vs Plumbing", description: "Conduit/cable tray vs pipe — NEC 300.11 12\" separation required.", disciplines: ["Electrical","Plumbing"], categories: ["Conduits","Cable Trays","Pipes","Pipe Fittings"] },
+  { id: "view_mech_vs_elec", name: "Mechanical vs Electrical", description: "Ducts vs conduit/cable tray — accessible clearance per NEC.", disciplines: ["Mechanical","Electrical"], categories: ["Ducts","Duct Fittings","Conduits","Cable Trays"] },
+  { id: "view_mep_vs_arch", name: "MEP vs Architectural", description: "MEP trades against walls, ceilings, floors — catches ceiling cavity and wall penetration issues.", disciplines: ["Mechanical","Electrical","Plumbing","Architectural"], categories: ["Ducts","Pipes","Conduits","Walls","Ceilings","Floors","Doors"] },
+  { id: "view_fire_protection", name: "Fire Protection vs All", description: "Sprinkler and fire main routing against every other trade — NFPA-driven.", disciplines: ["Fire Protection","Mechanical","Electrical","Plumbing","Structural"], categories: ["Sprinklers","Pipes","Ducts","Conduits","Structural Framing"] },
+  { id: "view_structure_only", name: "Structure Only", description: "Structural framing, columns, and foundations — internal structural coordination.", disciplines: ["Structural"], categories: ["Structural Framing","Structural Columns","Structural Foundations","Structural Connections"] },
+  { id: "view_above_ceiling", name: "Above Ceiling", description: "Everything routed in the ceiling cavity — ducts, pipes, conduit, sprinklers, cable tray.", disciplines: ["Mechanical","Electrical","Plumbing","Fire Protection"], categories: ["Ducts","Pipes","Conduits","Cable Trays","Sprinklers"] }
+];
+
+// Industry-standard clash group configurations — seeded per-project on demand.
+const BUILTIN_CLASH_GROUPS = [
+  { name: "Ducts vs Pipes", description: "Mechanical duct vs plumbing/hydronic pipe. 18\" clearance per SMACNA.", category_a: "Ducts", category_b: "Pipes", tolerance_mm: 457, clash_type: "clearance", priority: "high" },
+  { name: "Ducts vs Structure", description: "Duct routing conflicting with structural framing — typically requires sleeve or reroute.", category_a: "Ducts", category_b: "Structural Framing", tolerance_mm: 0, clash_type: "hard", priority: "critical" },
+  { name: "Pipes vs Structure", description: "Pipe routing conflicting with structural framing — PE stamp required for penetrations.", category_a: "Pipes", category_b: "Structural Framing", tolerance_mm: 0, clash_type: "hard", priority: "critical" },
+  { name: "Electrical vs Pipes", description: "Conduit or cable tray vs pipe. NEC 300.11 requires 12\" separation.", category_a: "Conduits", category_b: "Pipes", tolerance_mm: 305, clash_type: "clearance", priority: "high" },
+  { name: "Ducts vs Electrical", description: "Duct vs conduit/cable tray. Maintain NEC accessible clearance.", category_a: "Ducts", category_b: "Conduits", tolerance_mm: 152, clash_type: "clearance", priority: "medium" },
+  { name: "Sprinklers vs Ducts", description: "Fire protection sprinkler main vs mechanical duct — NFPA 13 clearances.", category_a: "Sprinklers", category_b: "Ducts", tolerance_mm: 152, clash_type: "clearance", priority: "high" },
+  { name: "Mechanical Equipment vs Structure", description: "Air handlers, pumps, chillers vs structural frame. Review seismic restraints.", category_a: "Mechanical Equipment", category_b: "Structural Framing", tolerance_mm: 0, clash_type: "hard", priority: "critical" },
+  { name: "Walls vs MEP", description: "Wall penetrations by MEP without documented sleeves.", category_a: "Walls", category_b: "Pipes", tolerance_mm: 0, clash_type: "hard", priority: "medium" },
+  { name: "Ceilings vs MEP", description: "Ceiling height conflicts with above-ceiling MEP routing.", category_a: "Ceilings", category_b: "Ducts", tolerance_mm: 0, clash_type: "hard", priority: "medium" },
+  { name: "Structural Columns vs Structural Framing", description: "Internal structural coordination — column/beam intersection checks.", category_a: "Structural Columns", category_b: "Structural Framing", tolerance_mm: 0, clash_type: "hard", priority: "high" }
+];
+
 // ── MCP TOOLS DEFINITION ──────────────────────────────────────────────────
 const TOOLS = [
   { name: "upload_model", description: "Upload a 3D model file to APS/ScanBIM (Revit .rvt, Navisworks .nwd/.nwc, IFC, FBX, OBJ, SolidWorks, point clouds, 50+ formats). Translates via Autodesk Platform Services and returns a browser-based 3D viewer link and QR code.", inputSchema: { type: "object", properties: { file_url: { type: "string", description: "Public URL to the 3D model file" }, file_name: { type: "string", description: "Filename with extension (e.g. building.rvt)" }, project_name: { type: "string", description: "Project name for organization (optional)" } }, required: ["file_url", "file_name"] } },
@@ -253,7 +307,12 @@ const TOOLS = [
   { name: "xr_list_sessions", description: "List active and past VR/AR sessions.", inputSchema: { type: "object", properties: { model_id: { type: "string" }, session_type: { type: "string", enum: ["vr","ar","all"] } } } },
   { name: "twinmotion_render", description: "Generate photorealistic Twinmotion-style render with time-of-day, weather, season, and camera controls.", inputSchema: { type: "object", properties: { model_id: { type: "string" }, time_of_day: { type: "string", enum: ["dawn","morning","noon","afternoon","dusk","night"] }, weather: { type: "string", enum: ["clear","partly_cloudy","overcast","rain","snow"] }, season: { type: "string", enum: ["spring","summer","autumn","winter"] }, camera_preset: { type: "string" }, resolution: { type: "string", enum: ["1080p","4k","8k"] } }, required: ["model_id"] } },
   { name: "twinmotion_walkthrough", description: "Generate animated cinematic walkthrough video of the model.", inputSchema: { type: "object", properties: { model_id: { type: "string" }, duration_seconds: { type: "number" }, style: { type: "string", enum: ["cinematic","technical","presentation"] } }, required: ["model_id"] } },
-  { name: "lumion_render", description: "Generate Lumion-style architectural visualization with landscaping, people, vehicles, and atmospheric effects.", inputSchema: { type: "object", properties: { model_id: { type: "string" }, style: { type: "string", enum: ["photorealistic","artistic","sketch","aerial"] }, add_landscaping: { type: "boolean" }, add_people: { type: "boolean" }, add_vehicles: { type: "boolean" } }, required: ["model_id"] } }
+  { name: "lumion_render", description: "Generate Lumion-style architectural visualization with landscaping, people, vehicles, and atmospheric effects.", inputSchema: { type: "object", properties: { model_id: { type: "string" }, style: { type: "string", enum: ["photorealistic","artistic","sketch","aerial"] }, add_landscaping: { type: "boolean" }, add_people: { type: "boolean" }, add_vehicles: { type: "boolean" } }, required: ["model_id"] } },
+  { name: "list_coordination_views", description: "List Model Coordination views available for a project or model — returns both built-in industry-standard views (MEP Coordination, MEP vs Structure, Above Ceiling, etc.) and any custom views saved for the project.", inputSchema: { type: "object", properties: { project_id: { type: "string", description: "Optional ACC/BIM360 or internal project ID to filter custom views" }, model_id: { type: "string", description: "Optional model URN to filter views attached to a specific model" }, include_builtin: { type: "boolean", description: "Include the built-in industry-standard views (default true)" } } } },
+  { name: "create_coordination_view", description: "Create and save a custom Model Coordination view with a named list of disciplines and element categories for recurring use.", inputSchema: { type: "object", properties: { name: { type: "string", description: "Human-readable view name (e.g. 'Level 3 Above Ceiling')" }, description: { type: "string" }, project_id: { type: "string", description: "Project to scope the view to" }, model_id: { type: "string", description: "Optional APS URN to attach the view to" }, disciplines: { type: "array", items: { type: "string" }, description: "Disciplines to include (Architectural, Structural, Mechanical, Electrical, Plumbing, Fire Protection)" }, categories: { type: "array", items: { type: "string" }, description: "Element categories to include (Ducts, Pipes, Walls, Structural Framing, etc.)" } }, required: ["name"] } },
+  { name: "list_clash_groups", description: "List clash groups configured for a project. Returns stored per-project groups and, optionally, the industry-standard starter set (Ducts vs Pipes, MEP vs Structure, etc.) if none are configured yet.", inputSchema: { type: "object", properties: { project_id: { type: "string", description: "Project ID to list clash groups for. If omitted, returns only the built-in starter set." }, include_builtin: { type: "boolean", description: "Also include the built-in starter set (default: true when project has no groups)" } } } },
+  { name: "create_clash_group", description: "Create a clash group configuration for a project — a named pair of categories with tolerance and clash type (hard/soft/clearance) that can be reused across clash runs.", inputSchema: { type: "object", properties: { project_id: { type: "string" }, name: { type: "string" }, description: { type: "string" }, category_a: { type: "string", description: "First element category (e.g. Ducts)" }, category_b: { type: "string", description: "Second element category (e.g. Pipes)" }, tolerance_mm: { type: "number", description: "Clearance tolerance in millimeters. 0 for hard clashes." }, clash_type: { type: "string", enum: ["hard","soft","clearance"] }, priority: { type: "string", enum: ["critical","high","medium","low"] } }, required: ["project_id","name","category_a","category_b"] } },
+  { name: "seed_project_clash_groups", description: "Seed a project with the industry-standard starter set of clash groups (10 VDC-standard pairs including Ducts vs Pipes, MEP vs Structure, Sprinklers vs Ducts, etc.). Idempotent — skips groups that already exist by name.", inputSchema: { type: "object", properties: { project_id: { type: "string" } }, required: ["project_id"] } }
 ];
 
 const SUPPORTED_FORMATS = {
@@ -559,6 +618,161 @@ async function handleTool(name, args, env) {
         effects: { landscaping: args.add_landscaping ?? true, people: args.add_people ?? true, vehicles: args.add_vehicles ?? false },
         preview_url: `https://scanbim.app/renders/${renderId}`,
         estimated_completion: "3-7 minutes"
+      };
+    }
+
+    case "list_coordination_views": {
+      const includeBuiltin = args.include_builtin !== false;
+      const builtin = includeBuiltin ? BUILTIN_COORDINATION_VIEWS.map(v => ({ ...v, is_builtin: true })) : [];
+      let custom = [];
+      if (env.DB) {
+        try {
+          let sql = "SELECT * FROM coordination_views WHERE is_builtin = 0";
+          const binds = [];
+          if (args.project_id) { sql += " AND project_id = ?"; binds.push(args.project_id); }
+          if (args.model_id) { sql += " AND model_id = ?"; binds.push(args.model_id); }
+          sql += " ORDER BY created_at DESC";
+          const rows = await env.DB.prepare(sql).bind(...binds).all();
+          custom = (rows.results || []).map(r => ({
+            id: r.id, name: r.name, description: r.description,
+            project_id: r.project_id, model_id: r.model_id,
+            disciplines: r.disciplines ? JSON.parse(r.disciplines) : [],
+            categories: r.categories ? JSON.parse(r.categories) : [],
+            is_builtin: false, created_at: r.created_at
+          }));
+        } catch (e) {}
+      }
+      const views = [...builtin, ...custom];
+      return {
+        status: "success",
+        project_id: args.project_id || null,
+        model_id: args.model_id || null,
+        view_count: views.length,
+        builtin_count: builtin.length,
+        custom_count: custom.length,
+        views
+      };
+    }
+
+    case "create_coordination_view": {
+      if (!env.DB) return { status: "error", message: "D1 database not bound — cannot persist custom views." };
+      const id = `view_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+      try {
+        await env.DB.prepare(
+          "INSERT INTO coordination_views (id, name, description, project_id, model_id, disciplines, categories, is_builtin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)"
+        ).bind(
+          id,
+          args.name,
+          args.description || null,
+          args.project_id || null,
+          args.model_id || null,
+          JSON.stringify(args.disciplines || []),
+          JSON.stringify(args.categories || []),
+          new Date().toISOString()
+        ).run();
+      } catch (e) {
+        return { status: "error", message: `Failed to create coordination view: ${e.message}` };
+      }
+      return {
+        status: "success",
+        view_id: id,
+        name: args.name,
+        project_id: args.project_id || null,
+        model_id: args.model_id || null,
+        disciplines: args.disciplines || [],
+        categories: args.categories || [],
+        note: "Custom coordination view saved. Retrieve with list_coordination_views."
+      };
+    }
+
+    case "list_clash_groups": {
+      let stored = [];
+      if (env.DB && args.project_id) {
+        try {
+          const rows = await env.DB.prepare(
+            "SELECT * FROM clash_groups WHERE project_id = ? ORDER BY priority DESC, created_at DESC"
+          ).bind(args.project_id).all();
+          stored = (rows.results || []).map(r => ({
+            id: r.id, project_id: r.project_id, name: r.name, description: r.description,
+            category_a: r.category_a, category_b: r.category_b,
+            tolerance_mm: r.tolerance_mm, clash_type: r.clash_type, priority: r.priority,
+            is_builtin: false, created_at: r.created_at
+          }));
+        } catch (e) {}
+      }
+      const includeBuiltin = args.include_builtin === true || (args.include_builtin !== false && stored.length === 0);
+      const builtin = includeBuiltin ? BUILTIN_CLASH_GROUPS.map((g, i) => ({ id: `builtin_${i}`, ...g, is_builtin: true, project_id: args.project_id || null })) : [];
+      const groups = [...stored, ...builtin];
+      return {
+        status: "success",
+        project_id: args.project_id || null,
+        group_count: groups.length,
+        stored_count: stored.length,
+        builtin_count: builtin.length,
+        groups,
+        note: stored.length === 0 && args.project_id
+          ? "No stored clash groups for this project. Call seed_project_clash_groups to persist the industry-standard starter set."
+          : undefined
+      };
+    }
+
+    case "create_clash_group": {
+      if (!env.DB) return { status: "error", message: "D1 database not bound — cannot persist clash groups." };
+      const id = `cg_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+      try {
+        await env.DB.prepare(
+          "INSERT INTO clash_groups (id, project_id, name, description, category_a, category_b, tolerance_mm, clash_type, priority, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(
+          id,
+          args.project_id,
+          args.name,
+          args.description || null,
+          args.category_a,
+          args.category_b,
+          args.tolerance_mm ?? 0,
+          args.clash_type || 'hard',
+          args.priority || 'medium',
+          new Date().toISOString()
+        ).run();
+      } catch (e) {
+        return { status: "error", message: `Failed to create clash group: ${e.message}` };
+      }
+      return {
+        status: "success",
+        clash_group_id: id,
+        project_id: args.project_id,
+        name: args.name,
+        category_a: args.category_a,
+        category_b: args.category_b,
+        clash_type: args.clash_type || 'hard',
+        priority: args.priority || 'medium',
+        tolerance_mm: args.tolerance_mm ?? 0
+      };
+    }
+
+    case "seed_project_clash_groups": {
+      if (!env.DB) return { status: "error", message: "D1 database not bound — cannot seed clash groups." };
+      if (!args.project_id) return { status: "error", message: "project_id required." };
+      const existing = await env.DB.prepare("SELECT name FROM clash_groups WHERE project_id = ?").bind(args.project_id).all();
+      const existingNames = new Set((existing.results || []).map(r => r.name));
+      const now = new Date().toISOString();
+      const seeded = [];
+      for (const g of BUILTIN_CLASH_GROUPS) {
+        if (existingNames.has(g.name)) continue;
+        const id = `cg_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+        try {
+          await env.DB.prepare(
+            "INSERT INTO clash_groups (id, project_id, name, description, category_a, category_b, tolerance_mm, clash_type, priority, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+          ).bind(id, args.project_id, g.name, g.description, g.category_a, g.category_b, g.tolerance_mm, g.clash_type, g.priority, now).run();
+          seeded.push({ id, name: g.name, category_a: g.category_a, category_b: g.category_b, priority: g.priority });
+        } catch (e) {}
+      }
+      return {
+        status: "success",
+        project_id: args.project_id,
+        seeded_count: seeded.length,
+        skipped_count: BUILTIN_CLASH_GROUPS.length - seeded.length,
+        seeded
       };
     }
 
