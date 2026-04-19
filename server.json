@@ -1,21 +1,25 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.scanbim-labs/scanbim-mcp",
-  "description": "The AI Hub for AEC — 46 real tools for Revit, Navisworks, ACC, Twinmotion, XR, and 50+ 3D formats via Autodesk Platform Services. Upload, convert, view, analyze, and share BIM models with AI.",
+  "name": "io.scanbimlabs/scanbim",
+  "description": "Unified AEC tools: ACC, Revit, Navisworks, Twinmotion, and APS from one endpoint.",
+  "version": "1.0.5",
   "repository": {
     "url": "https://github.com/ScanBIM-Labs/scanbim-mcp",
     "source": "github"
   },
-  "version": "1.0.5",
-  "packages": [
+  "homepage": "https://scanbimlabs.io/mcp",
+  "remotes": [
     {
-      "registryType": "npm",
-      "identifier": "@scanbim-labs/scanbim-mcp",
-      "version": "1.0.5",
-      "transport": {
-        "type": "streamableHttp",
-        "url": "https://scanbim-mcp.itmartin24.workers.dev/mcp"
-      }
+      "type": "streamable-http",
+      "url": "https://mcp.scanbimlabs.io/unified",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer <ScanBIM API key>",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
     }
   ]
 }
