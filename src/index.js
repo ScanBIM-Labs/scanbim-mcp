@@ -33,7 +33,7 @@ async function getAPSToken(env, scope = 'data:read data:write data:create bucket
   });
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`APS auth failed: ${err}`);
+    throw new Error(`APS auth failed (${resp.status}): ${err}. Ensure the APS app has Data Management and Model Derivative APIs enabled at https://aps.autodesk.com/myapps`);
   }
   const data = await resp.json();
   const token = data.access_token;
@@ -94,15 +94,29 @@ async function uploadToOSS(token, bucketKey, objectName, fileUrl) {
 
 // ── APS MODEL DERIVATIVE ──────────────────────────────────────────────────
 async function translateModel(token, urn, outputFormat = 'svf2') {
+  const body = {
+    input: { urn },
+    output: {
+      formats: [{
+        type: outputFormat,
+        views: ['2d', '3d'],
+        advanced: { generateMasterViews: true }
+      }]
+    }
+  };
   const resp = await fetch(`${APS_BASE}/modelderivative/v2/designdata/job`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-ads-force': 'true' },
-    body: JSON.stringify({
-      input: { urn },
-      output: { formats: [{ type: outputFormat, views: ['2d','3d'] }] }
-    })
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'x-ads-force': 'true'
+    },
+    body: JSON.stringify(body)
   });
-  if (!resp.ok) throw new Error(`Translation failed: ${await resp.text()}`);
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Translation failed (${resp.status}): ${errText}`);
+  }
   return await resp.json();
 }
 
@@ -328,7 +342,8 @@ async function handleTool(name, args, env) {
     try { await env.DB.prepare("INSERT INTO usage_log (tool_name, model_id, created_at) VALUES (?, ?, ?)").bind(name, args.model_id || null, new Date().toISOString()).run(); } catch (e) {}
   }
 
-  const BUCKET = 'scanbim-models';
+  const BUCKET = env.APS_BUCKET_KEY
+    || `scanbim-mcp-${(env.APS_CLIENT_ID || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12)}`;
 
   switch (name) {
 
